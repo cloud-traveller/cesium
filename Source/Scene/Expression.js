@@ -43,6 +43,7 @@ define([
      *
      * @param {String} [expression] The expression defined using the 3D Tiles Styling language.
      * @param {Object} [defines] Defines in the style.
+     * @param {Object} [mutables] Mutables in the style.
      *
      * @example
      * var expression = new Cesium.Expression('(regExp("^Chest").test(${County})) && (${YearBuilt} >= 1970)');
@@ -52,7 +53,7 @@ define([
      * var expression = new Cesium.Expression('(${Temperature} > 90) ? color("red") : color("white")');
      * expression.evaluateColor(frameState, feature, result); // returns a Cesium.Color object
      */
-    function Expression(expression, defines) {
+    function Expression(expression, defines, mutables) {
         //>>includeStart('debug', pragmas.debug);
         Check.typeOf.string('expression', expression);
         //>>includeEnd('debug');
@@ -72,6 +73,7 @@ define([
             throw new RuntimeError(e);
         }
 
+        this._mutables = mutables;
         this._runtimeAst = createRuntimeAst(this, ast);
     }
 
@@ -676,11 +678,15 @@ define([
         return new Node(ExpressionNodeType.REGEX, pattern);
     }
 
-    function parseKeywordsAndVariables(ast) {
+    function parseKeywordsAndVariables(expression, ast) {
         if (isVariable(ast.name)) {
             var name = getPropertyName(ast.name);
             if (name.substr(0, 8) === 'tiles3d_') {
                 return new Node(ExpressionNodeType.BUILTIN_VARIABLE, name);
+            }
+            var mutables = expression._mutables;
+            if (defined(mutables) && defined(mutables[name])) {
+                return new Node(ExpressionNodeType.MUTABLE, mutables[name]);
             }
             return new Node(ExpressionNodeType.VARIABLE, name);
         } else if (ast.name === 'NaN') {
@@ -751,7 +757,7 @@ define([
         } else if (ast.type === 'CallExpression') {
             node = parseCall(expression, ast);
         } else if (ast.type === 'Identifier') {
-            node = parseKeywordsAndVariables(ast);
+            node = parseKeywordsAndVariables(expression, ast);
         } else if (ast.type === 'UnaryExpression') {
             op = ast.operator;
             var child = createRuntimeAst(expression, ast.argument);
@@ -896,6 +902,8 @@ define([
             if (node._value === 'tiles3d_tileset_time') {
                 node.evaluate = evaluateTilesetTime;
             }
+        } else if (node._type === ExpressionNodeType.MUTABLE) {
+            node.evaluate = node._evaluateMutable;
         } else {
             node.evaluate = node._evaluateLiteral;
         }
@@ -1061,6 +1069,19 @@ define([
     Node.prototype._evaluateVariable = function(frameState, feature) {
         // evaluates to undefined if the property name is not defined for that feature
         return feature.getProperty(this._value);
+    };
+
+    Node.prototype._evaluateMutable = function(frameState, feature) {
+        var mutable = this._value;
+        if (mutable.type === 'vec2') {
+            console.log(mutable.value.x);
+            return Cartesian2.clone(mutable.value, scratchStorage.getCartesian2());
+        } else if (mutable.type === 'vec3') {
+            return Cartesian3.clone(mutable.value, scratchStorage.getCartesian3());
+        } else if (mutable.type === 'vec4') {
+            return Cartesian4.clone(mutable.value, scratchStorage.getCartesian4());
+        }
+        return mutable.value;
     };
 
     function checkFeature (ast) {
